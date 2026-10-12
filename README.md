@@ -86,6 +86,12 @@ To regenerate the icon artwork, run `swiftc -O -o /tmp/mkicon Tools/MakeAppIcon.
 
 The Metal shader lives in `Render/Shaders.swift` as a source string compiled at launch, so the project builds without Xcode's separately installed Metal Toolchain component.
 
+## License
+
+The code in this repository is released under the [MIT License](LICENSE).
+
+That license does not cover the SHARP model, which is downloaded separately and remains under the Apple Machine Learning Research Model License (non-commercial research use only).
+
 ## Notes
 
 - The app is unsandboxed and signed to run locally; it is not set up for distribution.
