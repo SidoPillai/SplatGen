@@ -77,7 +77,12 @@ SplatGen/
   Generation/   Model storage/download and SHARP inference through Core ML
   Render/       Metal renderer, shader source, camera and input handling
   Splat/        Gaussian cloud data model and .ply reading/writing
+  Assets.xcassets/  App icon
+Tools/
+  MakeAppIcon.swift  Script that draws the app icon (not part of the app target)
 ```
+
+To regenerate the icon artwork, run `swiftc -O -o /tmp/mkicon Tools/MakeAppIcon.swift && /tmp/mkicon icon.png`, then resize the result into `AppIcon.appiconset`.
 
 The Metal shader lives in `Render/Shaders.swift` as a source string compiled at launch, so the project builds without Xcode's separately installed Metal Toolchain component.
 
