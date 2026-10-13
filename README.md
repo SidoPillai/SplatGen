@@ -80,7 +80,7 @@ Move the camera slowly and sideways past the subject while filming; you can only
 3. **Un-projection.** Positions and covariances are scaled back to the photo's real field of view and aspect ratio, giving a metric scene with the camera at the origin looking down +z (OpenCV convention: x right, y down).
 4. **Rendering.** Each Gaussian is drawn as an instanced screen-space quad. The vertex shader projects the 3D covariance to a 2D ellipse; fragments are alpha-blended back to front in linear colour. Draw order comes from a 16-bit counting sort on log depth that runs off the main thread whenever the camera moves.
 
-Exported `.ply` files use the standard 3D Gaussian Splatting layout, plus the camera elements SHARP's own tools write, so they open in other splat viewers and reopen here with the original framing.
+Exported `.ply` files use the standard 3D Gaussian Splatting layout, plus the camera elements SHARP's own tools write, so they open in other splat viewers and reopen here with the original framing. Files are kept under 50 MB (about 890,000 splats): scenes are generated within that limit, and a larger file opened from elsewhere has its least visible splats dropped on export.
 
 ## Project layout
 

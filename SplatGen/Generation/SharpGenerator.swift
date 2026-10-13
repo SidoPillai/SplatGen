@@ -107,7 +107,8 @@ actor SharpGenerator {
 		guard !splats.isEmpty else { throw Failure.unexpectedOutput("no visible Gaussians") }
 
 		let camera = SourceCamera(imageSize: SIMD2(Float(photo.width), Float(photo.height)), focalPx: photo.focalPx)
-		return GaussianCloud(splats: splats, camera: camera)
+		// Keep the scene to what fits in an exported file, so the view matches the export.
+		return GaussianCloud(splats: splats, camera: camera).pruned(to: PLY.maxSplats)
 	}
 
 	// MARK: Image handling

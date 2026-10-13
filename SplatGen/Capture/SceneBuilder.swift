@@ -152,6 +152,7 @@ enum SceneBuilder {
 			// The viewer shows one colour per splat, so train without view-dependent colour (SH degree 0).
 			try await run(brush, [
 				dense.path, "--total-steps", String(trainingSteps), "--sh-degree", "0",
+				"--max-splats", String(PLY.maxSplats),
 				"--export-every", String(trainingSteps / 10), "--export-path", exports.path,
 				"--export-name", "splat_{iter}.ply",
 			], in: scene, log: log)

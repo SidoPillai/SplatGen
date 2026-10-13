@@ -64,6 +64,33 @@ final class GaussianCloud: @unchecked Sendable {
 		depthQuantiles = (0...100).map { sample[min(sample.count - 1, $0 * sample.count / 100)] }
 	}
 
+	/// The `limit` splats that add most to the picture, in their original order; `self` when already within it.
+	/// A splat counts for more the more opaque it is and the larger it looks from the camera at the origin.
+	func pruned(to limit: Int) -> GaussianCloud {
+		guard count > limit else { return self }
+		var scores = [Float](repeating: 0, count: count)
+		for i in 0..<count {
+			let s = splats[i]
+			let size = cbrt(max(simd_determinant(s.covariance), 0))
+			let distance = simd_length_squared(SIMD3(s.position.x, s.position.y, s.position.z))
+			scores[i] = s.color.w * size / max(distance, 1e-6)
+		}
+		let threshold = scores.sorted(by: >)[limit - 1]
+		var kept = ContiguousArray<GPUSplat>()
+		kept.reserveCapacity(limit)
+		// Splats tied at the threshold fill whatever room is left.
+		var ties = limit - scores.reduce(0) { $0 + ($1 > threshold ? 1 : 0) }
+		for i in 0..<count {
+			if scores[i] > threshold {
+				kept.append(splats[i])
+			} else if scores[i] == threshold, ties > 0 {
+				kept.append(splats[i])
+				ties -= 1
+			}
+		}
+		return GaussianCloud(splats: kept, camera: camera)
+	}
+
 	func depth(atQuantile q: Float) -> Float {
 		let x = max(0, min(1, q)) * 100
 		let i = Int(x)
