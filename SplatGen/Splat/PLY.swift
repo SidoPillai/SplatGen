@@ -123,14 +123,33 @@ enum PLY {
 				}
 			}
 		}
-		return GaussianCloud(splats: splats, camera: camera)
+		let cloud = GaussianCloud(splats: splats, camera: camera)
+		// A file written facing the other way says so in its extrinsic (world to camera, row-major).
+		if let extrinsic = elements.first(where: { $0.name == "extrinsic" && $0.count == 16 && $0.stride == 4 }) {
+			let m = data.withUnsafeBytes { raw in
+				(0..<12).map { raw.loadUnaligned(fromByteOffset: extrinsic.dataOffset + $0 * 4, as: Float.self) }
+			}
+			let rotation = simd_float3x3(rows: [SIMD3(m[0], m[1], m[2]), SIMD3(m[4], m[5], m[6]), SIMD3(m[8], m[9], m[10])])
+			let translation = SIMD3(m[3], m[7], m[11])
+			let skew = rotation * rotation.transpose - matrix_identity_float3x3
+			let isRigid = max(simd_length(skew[0]), simd_length(skew[1]), simd_length(skew[2])) < 1e-3
+				&& simd_determinant(rotation) > 0
+			if isRigid, rotation != matrix_identity_float3x3 || translation != .zero {
+				return cloud.transformed(rotation: rotation, translation: translation, camera: camera)
+			}
+		}
+		return cloud
 	}
 
 	// MARK: Writing
 
 	/// Writes `cloud`, first dropping its least visible splats if it holds more than `maxSplats`.
-	static func write(_ cloud: GaussianCloud, to url: URL) throws {
-		let cloud = cloud.pruned(to: maxSplats)
+	/// `facingBackward` turns the scene half a turn about its vertical axis, so it lies down -z instead of +z:
+	/// viewers that look down -z (visionOS) then show it in front of the viewer rather than behind.
+	static func write(_ cloud: GaussianCloud, to url: URL, facingBackward: Bool = false) throws {
+		var cloud = cloud.pruned(to: maxSplats)
+		let turn = simd_float3x3(diagonal: SIMD3(-1, 1, -1))
+		if facingBackward { cloud = cloud.transformed(rotation: turn, translation: .zero, camera: cloud.camera) }
 		let n = cloud.count
 		let w = cloud.camera.imageSize.x, h = cloud.camera.imageSize.y, f = cloud.camera.focalPx
 		var header = "ply\nformat binary_little_endian 1.0\n"
@@ -170,7 +189,10 @@ enum PLY {
 
 		var data = Data(header.utf8)
 		vertices.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
-		let extrinsic: [Float] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+		// World to camera: the turn is its own inverse.
+		let extrinsic: [Float] = facingBackward
+			? [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1]
+			: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 		let intrinsic: [Float] = [f, 0, w / 2, 0, f, h / 2, 0, 0, 1]
 		let imageSize: [UInt32] = [UInt32(w), UInt32(h)]
 		extrinsic.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }

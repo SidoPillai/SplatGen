@@ -158,11 +158,22 @@ final class AppModel {
 		let panel = NSSavePanel()
 		panel.allowedContentTypes = [Self.plyType]
 		panel.nameFieldStringValue = title + ".ply"
+		// visionOS viewers look down -z, so a scene left facing +z opens behind the viewer.
+		let visionKey = "exportForVisionPro"
+		let forVision = NSButton(checkboxWithTitle: "Place in front of the viewer on Apple Vision Pro", target: nil, action: nil)
+		forVision.state = UserDefaults.standard.bool(forKey: visionKey) ? .on : .off
+		forVision.frame.size = forVision.fittingSize
+		let accessory = NSView(frame: NSRect(origin: .zero, size: forVision.frame.insetBy(dx: -16, dy: -10).size))
+		forVision.frame.origin = CGPoint(x: 16, y: 10)
+		accessory.addSubview(forVision)
+		panel.accessoryView = accessory
 		guard panel.runModal() == .OK, let url = panel.url else { return }
+		let facingBackward = forVision.state == .on
+		UserDefaults.standard.set(facingBackward, forKey: visionKey)
 		phase = .working("Exporting…")
 		Task {
 			do {
-				try await Task.detached { try PLY.write(cloud, to: url) }.value
+				try await Task.detached { try PLY.write(cloud, to: url, facingBackward: facingBackward) }.value
 				phase = .ready
 			} catch {
 				fail(error)
