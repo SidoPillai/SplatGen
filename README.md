@@ -42,7 +42,7 @@ The first generation takes longer (around 30 seconds on an M2 Pro) while Core ML
 
 | Action | Input |
 | --- | --- |
-| Open a photo or `.ply` | Drag onto the window, or ⌘O |
+| Open a photo, a video or a `.ply` | Drag onto the window, or ⌘O |
 | Orbit | Drag |
 | Move in and out | Scroll or pinch |
 | Pan | ⌥-drag or right-drag |
@@ -58,22 +58,36 @@ The control bar at the bottom of the viewer sets:
 - **Crop** — clip the view to the original photo's frame. SHARP emits rough splats beyond the photo's edges, so this is on by default.
 - **Follow pointer** — lean the view toward the pointer.
 
+- **Fly** — switch to a free camera: drag to look, WASD or the arrow keys to move, Q/E for down/up, ⇧ to go faster.
+
 A single photo only supports modest camera moves. Beyond roughly 30° of orbit, regions the photo never saw open up and the scene visibly tears.
+
+## Scenes from video
+
+Opening a video builds a splat you can fly through, instead of a view from one photo. This needs two external tools:
+
+- [COLMAP](https://colmap.github.io), which works out where the camera was for each frame: `brew install colmap`.
+- [Brush](https://github.com/ArthurBrussee/brush), which trains the Gaussians. Download a release and put `brush_app` anywhere inside `~/Library/Application Support/SplatGen/Tools/`.
+
+The app picks the sharpest frame from each short stretch of the video (about 300 at most), runs COLMAP and Brush on them, and opens the result at the first frame's viewpoint. Frames are kept in `~/Library/Application Support/SplatGen/Captures/` and finished scenes in `.../SplatGen/Scenes/`. Without the tools, only the frames are extracted.
+
+Move the camera slowly and sideways past the subject while filming; you can only explore where the camera went.
 
 ## How it works
 
 1. **Photo in.** The image is decoded with its EXIF orientation applied and stretched to SHARP's fixed 1536 × 1536 input. Focal length comes from EXIF when present, otherwise a 30 mm full-frame-equivalent lens is assumed, matching Apple's reference code.
 2. **Prediction.** Core ML returns about 1.2 million Gaussians (position, scale, rotation, linear colour, opacity) in a normalised frustum.
 3. **Un-projection.** Positions and covariances are scaled back to the photo's real field of view and aspect ratio, giving a metric scene with the camera at the origin looking down +z (OpenCV convention: x right, y down).
-4. **Rendering.** Each Gaussian is drawn as an instanced screen-space quad. The vertex shader projects the 3D covariance to a 2D ellipse; fragments are alpha-blended back to front in linear colour. Draw order comes from a 16-bit counting sort that runs off the main thread whenever the camera moves.
+4. **Rendering.** Each Gaussian is drawn as an instanced screen-space quad. The vertex shader projects the 3D covariance to a 2D ellipse; fragments are alpha-blended back to front in linear colour. Draw order comes from a 16-bit counting sort on log depth that runs off the main thread whenever the camera moves.
 
-Exported `.ply` files use the standard 3D Gaussian Splatting layout, plus the camera elements SHARP's own tools write, so they open in other splat viewers and reopen here with the original framing.
+Exported `.ply` files use the standard 3D Gaussian Splatting layout, plus the camera elements SHARP's own tools write, so they open in other splat viewers and reopen here with the original framing. Files are kept under 50 MB (about 890,000 splats): scenes are generated within that limit, and a larger file opened from elsewhere has its least visible splats dropped on export.
 
 ## Project layout
 
 ```
 SplatGen/
   App/          SwiftUI app, window, controls and app state
+  Capture/      Video frame selection, and scene building with COLMAP and Brush
   Generation/   Model storage/download and SHARP inference through Core ML
   Render/       Metal renderer, shader source, camera and input handling
   Splat/        Gaussian cloud data model and .ply reading/writing

@@ -17,7 +17,7 @@ struct Splat {
 struct Uniforms {
     float4x4 view;         // scene -> camera, OpenCV convention (y down, z forward)
     float4 focalViewport;  // fx, fy, viewport width, viewport height (pixels)
-    float4 reveal;         // progress 0...1, near depth, far depth, unused
+    float4 reveal;         // progress 0...1, near depth, far depth, smoothing variance per unit depth squared
 };
 
 struct VertexOut {
@@ -51,6 +51,12 @@ vertex VertexOut splatVertex(uint vertexID [[vertex_id]],
     float3x3 sigma = float3x3(float3(s.covA.x, s.covA.y, s.covA.z),
                               float3(s.covA.y, s.covA.w, s.covB.x),
                               float3(s.covA.z, s.covB.x, s.covB.y));
+    // 3D smoothing filter: keep every splat at least as wide as the source photo sampled it
+    // (position.z is its depth from the source camera), so splats still overlap when magnified.
+    float smoothing = u.reveal.w * s.position.z * s.position.z;
+    sigma[0][0] += smoothing;
+    sigma[1][1] += smoothing;
+    sigma[2][2] += smoothing;
     float3x3 rotation = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
 
     // Keep the linearised projection stable for splats far outside the frustum.

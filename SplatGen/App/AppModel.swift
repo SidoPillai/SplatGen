@@ -16,6 +16,10 @@ final class AppModel {
 	var title = "SplatGen"
 	var summary = ""
 	var errorMessage: String?
+	/// Frames from a video import that couldn't go on to become a scene, until the user has been told.
+	var importedFrames: FrameSet?
+	/// True while the job in progress can be stopped with `cancelWork()`.
+	var isCancellable = false
 
 	var modelInstalled = ModelStore.isInstalled
 	/// 0...1 while the model is downloading.
@@ -24,6 +28,7 @@ final class AppModel {
 	let viewer = ViewerState()
 	private let generator = SharpGenerator()
 	private var jobID = 0
+	private var videoTask: Task<Void, Never>?
 
 	static let photoTypes: [UTType] = [.jpeg, .png, .heic, .heif, .tiff, .webP, .bmp, .gif]
 	static let plyType = UTType(filenameExtension: "ply") ?? .data
@@ -37,8 +42,8 @@ final class AppModel {
 
 	func chooseFile() {
 		let panel = NSOpenPanel()
-		panel.allowedContentTypes = Self.photoTypes + [Self.plyType]
-		panel.message = "Choose a photo to turn into a 3D scene, or a .ply splat file to explore."
+		panel.allowedContentTypes = Self.photoTypes + [Self.plyType, .movie]
+		panel.message = "Choose a photo or a video to turn into a 3D scene, or a .ply splat file to explore."
 		if panel.runModal() == .OK, let url = panel.url { open(url) }
 	}
 
@@ -46,6 +51,8 @@ final class AppModel {
 		guard !isWorking else { return }
 		if url.pathExtension.lowercased() == "ply" {
 			loadSplats(url)
+		} else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true {
+			importVideo(url)
 		} else if modelInstalled {
 			generate(from: url)
 		} else {
@@ -71,6 +78,51 @@ final class AppModel {
 				fail(error)
 			}
 		}
+	}
+
+	private func importVideo(_ url: URL) {
+		phase = .working("Reading video…")
+		jobID += 1
+		let job = jobID
+		let report: @Sendable (String) -> Void = { message in
+			Task { @MainActor in
+				if self.jobID == job, self.isWorking { self.phase = .working(message) }
+			}
+		}
+		isCancellable = true
+		videoTask = Task {
+			defer { isCancellable = false }
+			let start = Date()
+			do {
+				let frames = try await FrameExtractor.extract(from: url) { fraction in
+					report("Picking the sharpest frames… \(Int(fraction * 100))%")
+				}
+				guard SceneBuilder.missingTools.isEmpty else {
+					jobID += 1
+					importedFrames = frames
+					phase = cloud == nil ? .idle : .ready
+					return
+				}
+				let scene = try await SceneBuilder.build(from: frames, status: report)
+				let minutes = max(1, Int((Date().timeIntervalSince(start) / 60).rounded()))
+				show(scene.cloud, named: scene.file,
+					 detail: "built from \(scene.framesUsed) of \(frames.frames.count) video frames in \(minutes) min")
+			} catch is CancellationError {
+				jobID += 1
+				phase = cloud == nil ? .idle : .ready
+			} catch {
+				fail(error)
+			}
+		}
+	}
+
+	func cancelWork() {
+		videoTask?.cancel()
+	}
+
+	func revealImportedFrames() {
+		guard let importedFrames else { return }
+		NSWorkspace.shared.activateFileViewerSelecting([importedFrames.directory])
 	}
 
 	private func loadSplats(_ url: URL) {

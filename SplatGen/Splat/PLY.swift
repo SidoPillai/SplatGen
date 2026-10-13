@@ -16,6 +16,13 @@ enum PLY {
 	}
 
 	private static let shC0: Float = 0.28209479177387814
+	/// Files this app writes never exceed this size.
+	static let maxFileBytes = 50_000_000
+	private static let fieldsPerVertex = 14
+	/// The most splats a file can hold within `maxFileBytes`, leaving room for the header and camera.
+	static let maxSplats = (maxFileBytes - 4096) / (fieldsPerVertex * MemoryLayout<Float>.stride)
+	/// Header line marking files whose camera is just a starting viewpoint, not the frame of a source photo.
+	private static let viewpointComment = "comment SplatGen camera is a viewpoint, not a source photo"
 
 	// MARK: Reading
 
@@ -111,7 +118,8 @@ enum PLY {
 				let w = raw.loadUnaligned(fromByteOffset: size.dataOffset, as: UInt32.self)
 				let h = raw.loadUnaligned(fromByteOffset: size.dataOffset + 4, as: UInt32.self)
 				if focal > 0, w > 0, h > 0 {
-					camera = SourceCamera(imageSize: SIMD2(Float(w), Float(h)), focalPx: focal)
+					camera = SourceCamera(
+						imageSize: SIMD2(Float(w), Float(h)), focalPx: focal, isFromPhoto: !header.contains(viewpointComment))
 				}
 			}
 		}
@@ -120,10 +128,14 @@ enum PLY {
 
 	// MARK: Writing
 
+	/// Writes `cloud`, first dropping its least visible splats if it holds more than `maxSplats`.
 	static func write(_ cloud: GaussianCloud, to url: URL) throws {
+		let cloud = cloud.pruned(to: maxSplats)
 		let n = cloud.count
 		let w = cloud.camera.imageSize.x, h = cloud.camera.imageSize.y, f = cloud.camera.focalPx
-		var header = "ply\nformat binary_little_endian 1.0\nelement vertex \(n)\n"
+		var header = "ply\nformat binary_little_endian 1.0\n"
+		if !cloud.camera.isFromPhoto { header += viewpointComment + "\n" }
+		header += "element vertex \(n)\n"
 		for name in ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
 					 "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"] {
 			header += "property float \(name)\n"
@@ -133,7 +145,6 @@ enum PLY {
 		header += "element image_size 2\nproperty uint image_size\n"
 		header += "end_header\n"
 
-		let fieldsPerVertex = 14
 		var vertices = [Float](repeating: 0, count: n * fieldsPerVertex)
 		vertices.withUnsafeMutableBufferPointer { out in
 			let out = UnsafeMutablePointer<Float>(out.baseAddress!)
