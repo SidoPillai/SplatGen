@@ -37,6 +37,10 @@ struct SplatView: NSViewRepresentable {
 			context.coordinator.cloud = cloud
 			context.coordinator.renderer?.setCloud(cloud)
 		}
+		// Movement keys only reach the viewport while it has keyboard focus.
+		if state.flyMode, view.window?.firstResponder !== view {
+			view.window?.makeFirstResponder(view)
+		}
 	}
 }
 
@@ -44,7 +48,62 @@ struct SplatView: NSViewRepresentable {
 final class InteractiveMetalView: MTKView {
 	var state: ViewerState?
 
+	/// Fly-mode movement keys by key code, as (right, up, forward): WASD, Q/E and the arrow keys.
+	private static let movementKeys: [UInt16: SIMD3<Float>] = [
+		13: SIMD3(0, 0, 1), 1: SIMD3(0, 0, -1), 0: SIMD3(-1, 0, 0), 2: SIMD3(1, 0, 0),
+		12: SIMD3(0, -1, 0), 14: SIMD3(0, 1, 0),
+		126: SIMD3(0, 0, 1), 125: SIMD3(0, 0, -1), 123: SIMD3(-1, 0, 0), 124: SIMD3(1, 0, 0),
+	]
+	private var heldKeys: Set<UInt16> = []
+	private var resignKeyObserver: NSObjectProtocol?
+
 	override var acceptsFirstResponder: Bool { true }
+
+	override func viewDidMoveToWindow() {
+		super.viewDidMoveToWindow()
+		if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
+		resignKeyObserver = nil
+		guard let window else { return }
+		window.makeFirstResponder(self)
+		// Key-up events are lost when the window loses focus, so stop moving then.
+		resignKeyObserver = NotificationCenter.default.addObserver(
+			forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+		) { [weak self] _ in
+			MainActor.assumeIsolated { self?.releaseKeys() }
+		}
+	}
+
+	override func resignFirstResponder() -> Bool {
+		releaseKeys()
+		return super.resignFirstResponder()
+	}
+
+	override func keyDown(with event: NSEvent) {
+		guard state?.flyMode == true, !event.modifierFlags.contains(.command),
+			  Self.movementKeys[event.keyCode] != nil else { return super.keyDown(with: event) }
+		heldKeys.insert(event.keyCode)
+		updateFlyInput()
+	}
+
+	override func keyUp(with event: NSEvent) {
+		guard heldKeys.remove(event.keyCode) != nil else { return super.keyUp(with: event) }
+		updateFlyInput()
+	}
+
+	override func flagsChanged(with event: NSEvent) {
+		state?.flyBoost = event.modifierFlags.contains(.shift)
+		super.flagsChanged(with: event)
+	}
+
+	private func releaseKeys() {
+		heldKeys.removeAll()
+		state?.flyBoost = false
+		updateFlyInput()
+	}
+
+	private func updateFlyInput() {
+		state?.flyInput = heldKeys.reduce(SIMD3<Float>(0, 0, 0)) { $0 + (Self.movementKeys[$1] ?? .zero) }
+	}
 
 	override func updateTrackingAreas() {
 		super.updateTrackingAreas()

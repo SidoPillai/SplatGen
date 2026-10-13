@@ -109,6 +109,15 @@ final class SplatRenderer: NSObject, MTKViewDelegate {
 		cloud.camera.focalPx * min(viewport.x / cloud.camera.imageSize.x, viewport.y / cloud.camera.imageSize.y)
 	}
 
+	/// Variance, per unit of squared source depth, of the 3D smoothing filter applied in the shader.
+	/// Sized from the spacing between splats as the source camera saw them, as in Mip-Splatting.
+	private func smoothing(for cloud: GaussianCloud) -> Float {
+		guard cloud.camera.isFromPhoto, cloud.count > 0 else { return 0 }
+		let spacingPx = (cloud.camera.imageSize.x * cloud.camera.imageSize.y / Float(cloud.count)).squareRoot()
+		let spacing = spacingPx / cloud.camera.focalPx
+		return 0.2 * spacing * spacing
+	}
+
 	private func encode(_ cloud: GaussianCloud, with encoder: MTLRenderCommandEncoder,
 						viewMatrix: simd_float4x4, viewport: SIMD2<Float>) {
 		guard let splatBuffer, orderBuffers.count == 3 else { return }
@@ -116,8 +125,8 @@ final class SplatRenderer: NSObject, MTKViewDelegate {
 		var uniforms = SplatUniforms(
 			view: viewMatrix,
 			focalViewport: SIMD4(focal, focal, viewport.x, viewport.y),
-			reveal: SIMD4(revealProgress, cloud.depth(atQuantile: 0.02), cloud.depth(atQuantile: 0.98), 0))
-		if state.cropToFrame, cloud.camera.isFromPhoto {
+			reveal: SIMD4(revealProgress, cloud.depth(atQuantile: 0.02), cloud.depth(atQuantile: 0.98), smoothing(for: cloud)))
+		if state.cropToFrame, !state.flyMode, cloud.camera.isFromPhoto {
 			let fit = focal / cloud.camera.focalPx
 			let width = min(Int(viewport.x), Int((cloud.camera.imageSize.x * fit).rounded()))
 			let height = min(Int(viewport.y), Int((cloud.camera.imageSize.y * fit).rounded()))
@@ -183,7 +192,8 @@ final class SplatRenderer: NSObject, MTKViewDelegate {
 		}
 	}
 
-	/// 16-bit counting sort of splat indices by camera depth, farthest first.
+	/// 16-bit counting sort of splat indices by camera depth, farthest first. Keys are spaced evenly in
+	/// log depth so a few distant splats don't starve the foreground of buckets.
 	private static func sortBackToFront(cloud: GaussianCloud, axis: SIMD4<Float>, into buffer: MTLBuffer) {
 		let count = cloud.count
 		let out = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
@@ -194,15 +204,20 @@ final class SplatRenderer: NSObject, MTKViewDelegate {
 				minDepth = min(minDepth, d)
 				maxDepth = max(maxDepth, d)
 			}
+			// Splats nearer than this are culled by the shader, so their order doesn't matter.
+			let near = max(minDepth, 0.02)
+			let far = max(maxDepth, near)
+			let logFar = log(far)
 			let buckets = 1 << 16
-			let scale = Float(buckets - 1) / max(maxDepth - minDepth, 1e-9)
+			let scale = Float(buckets - 1) / max(logFar - log(near), 1e-9)
 			let keys = UnsafeMutablePointer<UInt16>.allocate(capacity: count)
 			let offsets = UnsafeMutablePointer<UInt32>.allocate(capacity: buckets + 1)
 			defer { keys.deallocate(); offsets.deallocate() }
 			offsets.update(repeating: 0, count: buckets + 1)
 
 			for i in 0..<count {
-				let key = UInt16((maxDepth - simd_dot(positions[i], axis)) * scale)
+				let depth = max(near, min(far, simd_dot(positions[i], axis)))
+				let key = UInt16(max(0, min(Float(buckets - 1), (logFar - log(depth)) * scale)))
 				keys[i] = key
 				offsets[Int(key) + 1] += 1
 			}

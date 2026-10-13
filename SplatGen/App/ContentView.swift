@@ -25,7 +25,7 @@ struct ContentView: View {
 			}
 
 			if case .working(let message) = model.phase {
-				ProgressOverlay(message: message)
+				ProgressOverlay(message: message, onCancel: model.isCancellable ? { model.cancelWork() } : nil)
 			}
 
 			if isDropTargeted {
@@ -39,7 +39,7 @@ struct ContentView: View {
 		.toolbar {
 			ToolbarItemGroup {
 				Button("Open", systemImage: "photo.badge.plus") { model.chooseFile() }
-					.help("Open a photo or a .ply splat file")
+					.help("Open a photo, a .ply splat file or a video")
 					.disabled(model.isWorking)
 				Button("Export", systemImage: "square.and.arrow.up") { model.exportSplats() }
 					.help("Export the scene as a .ply splat file")
@@ -55,6 +55,19 @@ struct ContentView: View {
 			return true
 		} isTargeted: {
 			isDropTargeted = $0
+		}
+		.alert("Frames ready", isPresented: Binding(
+			get: { model.importedFrames != nil },
+			set: { if !$0 { model.importedFrames = nil } }),
+			presenting: model.importedFrames
+		) { _ in
+			Button("Show in Finder") { model.revealImportedFrames() }
+			Button("OK", role: .cancel) {}
+		} message: { frames in
+			Text("Kept \(frames.frames.count.formatted()) sharp frames out of \(frames.examined.formatted()) examined"
+				+ (frames.droppedAsBlurry > 0 ? ", after dropping \(frames.droppedAsBlurry.formatted()) blurry ones." : ".")
+				+ "\n\nTurning them into a 3D scene also needs \(SceneBuilder.missingTools.joined(separator: " and ")),"
+				+ " which couldn't be found on this Mac.")
 		}
 		.alert("Something went wrong", isPresented: Binding(
 			get: { model.errorMessage != nil },
@@ -79,9 +92,9 @@ private struct WelcomeView: View {
 				.font(.title2.weight(.semibold))
 
 			if model.modelInstalled {
-				Text("Drop a photo here, or open one. Everything runs on this Mac.")
+				Text("Drop a photo here to make a 3D scene, or a video to build one you can fly through. Everything runs on this Mac.")
 					.foregroundStyle(.secondary)
-				Button("Open Photo…") { model.chooseFile() }
+				Button("Open Photo or Video…") { model.chooseFile() }
 					.controlSize(.large)
 					.buttonStyle(.borderedProminent)
 			} else {
@@ -124,6 +137,7 @@ private struct ModelSetupView: View {
 
 private struct ProgressOverlay: View {
 	let message: String
+	var onCancel: (() -> Void)?
 
 	var body: some View {
 		VStack(spacing: 12) {
@@ -131,6 +145,10 @@ private struct ProgressOverlay: View {
 				.controlSize(.large)
 			Text(message)
 				.font(.callout)
+				.monospacedDigit()
+			if let onCancel {
+				Button("Cancel", action: onCancel)
+			}
 		}
 		.padding(28)
 		.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -144,35 +162,47 @@ private struct ViewerControls: View {
 	var body: some View {
 		VStack(spacing: 8) {
 			HStack(spacing: 16) {
-				Picker("Motion", selection: $viewer.motion) {
-					ForEach(MotionStyle.allCases) { Text($0.rawValue).tag($0) }
+				// These shape the orbit around the photo's viewpoint and don't apply while flying.
+				Group {
+					Picker("Motion", selection: $viewer.motion) {
+						ForEach(MotionStyle.allCases) { Text($0.rawValue).tag($0) }
+					}
+					.pickerStyle(.segmented)
+					.labelsHidden()
+					.fixedSize()
+
+					LabeledSlider(label: "Depth", systemImage: "move.3d", value: $viewer.intensity, range: 0...2)
+						.help("How far the camera travels")
+					LabeledSlider(label: "Focus", systemImage: "scope", value: $viewer.focus, range: 0.05...0.9)
+						.help("Which depth stays still while the camera moves: near … far")
+
+					Toggle(isOn: $viewer.cropToFrame) {
+						Image(systemName: "crop")
+					}
+					.toggleStyle(.button)
+					.help("Keep the view inside the original photo's frame")
+
+					Toggle(isOn: $viewer.followPointer) {
+						Image(systemName: "cursorarrow.motionlines")
+					}
+					.toggleStyle(.button)
+					.help("Lean the view toward the pointer")
 				}
-				.pickerStyle(.segmented)
-				.labelsHidden()
-				.fixedSize()
+				.disabled(viewer.flyMode)
 
-				LabeledSlider(label: "Depth", systemImage: "move.3d", value: $viewer.intensity, range: 0...2)
-					.help("How far the camera travels")
-				LabeledSlider(label: "Focus", systemImage: "scope", value: $viewer.focus, range: 0.05...0.9)
-					.help("Which depth stays still while the camera moves: near … far")
-
-				Toggle(isOn: $viewer.cropToFrame) {
-					Image(systemName: "crop")
+				Toggle(isOn: $viewer.flyMode) {
+					Image(systemName: "airplane")
 				}
 				.toggleStyle(.button)
-				.help("Keep the view inside the original photo's frame")
-
-				Toggle(isOn: $viewer.followPointer) {
-					Image(systemName: "cursorarrow.motionlines")
-				}
-				.toggleStyle(.button)
-				.help("Lean the view toward the pointer")
+				.help("Fly freely through the scene")
 
 				Button("Reset", systemImage: "arrow.counterclockwise") { viewer.resetCamera() }
 					.labelStyle(.iconOnly)
 					.help("Return to the photo's viewpoint (double-click the view)")
 			}
-			Text(summary + " · drag to orbit, scroll to move in, ⌥-drag to pan")
+			Text(summary + (viewer.flyMode
+				? " · drag to look, WASD to move, Q/E for down/up, hold ⇧ to go faster"
+				: " · drag to orbit, scroll to move in, ⌥-drag to pan"))
 				.font(.caption)
 				.foregroundStyle(.secondary)
 		}
